@@ -85,7 +85,11 @@ def load_from_directory(path:str, num_signals:int=-1, input_keys:List[str]=["aug
                 file_input_data.append(real_part_input)
         
         for output_key in output_keys:
-            loaded_output = loaded_data[output_key]
+            try :
+                loaded_output = loaded_data[output_key]
+            except:
+                print(f"Output key {output_key} not found in file {file}")
+                continue
             real_part_output = loaded_output.real
             imag_part_output = loaded_output.imag
             if complex_data:
@@ -274,7 +278,7 @@ def frequency_shift_jitter(complex_data:Tuple[np.array, np.array], ppm_range:Tup
     
     return shifted_real, shifted_imag 
 
-def BPF_ppm(fft_signal:np.ndarray[np.complex64], ppm_range:np.ndarray[np.float32, np.float32], ppm_pass:np.ndarray[np.float32, np.float32], ppm_stop:np.ndarray[np.float32, np.float32], gain_passband:float=1, ftype:str="butter") -> tuple[np.ndarray[np.complex64], np.ndarray[np.complex64], np.ndarray[np.complex64]]:
+def BPF_ppm(fft_signal:np.ndarray[np.complex64], ppm_range:np.ndarray[np.float32, np.float32], ppm_pass:np.ndarray[np.float32, np.float32], margin=0.75, gain_passband:float=1, ftype:str="butter") -> tuple[np.ndarray[np.complex64], np.ndarray[np.complex64], np.ndarray[np.complex64]]:
     """Take a signal in the frequency domain and filter it using a bandpass filter in the frequency domain, return the filtered signal in the time domain
 
     Args:
@@ -282,12 +286,13 @@ def BPF_ppm(fft_signal:np.ndarray[np.complex64], ppm_range:np.ndarray[np.float32
         min_ppm (_type_): _description_
         max_ppm (_type_): _description_
         ppm_pass (_type_): _description_
-        ppm_stop (_type_): _description_
+        margin: _description_
         ftype (str, optional): _description_. Defaults to "butter".
 
     Returns:
         _type_: _description_
     """
+    ppm_stop = np.array([ppm_pass[0]-margin, ppm_pass[1]+margin])
     wp = (ppm_pass - ppm_range.min()) / (ppm_range.max() - ppm_range.min())
     ws = (ppm_stop - ppm_range.min()) / (ppm_range.max() - ppm_range.min())
     
@@ -590,7 +595,7 @@ class VisualizePredictionCallback(tf.keras.callbacks.Callback):
                     
                 elif input_key == "augmented_ifft":
                     plt.plot(input_sample[:,2*(self.input_keys.index(input_key))], label=label, color="black")
-                    if "a" and "b" in self.input_keys:
+                    """ if "a" and "b" in self.input_keys:
                         a_index = self.input_keys.index("a")
                         a_real_part = np.trim_zeros(input_sample[:,2*(a_index)], "b")
                         a_imaginary_part = np.trim_zeros(input_sample[:,2*(a_index)+1], "b")
@@ -599,9 +604,10 @@ class VisualizePredictionCallback(tf.keras.callbacks.Callback):
                         b_imaginary_part = np.trim_zeros(input_sample[:,2*(b_index)+1], "b")
                         a = a_real_part + 1j*a_imaginary_part
                         b = b_real_part + 1j*b_imaginary_part
-                        impulse = signal.unit_impulse(len(self.input_signal))
+                        print(f"imput signal shape: {input_sample.shape}")
+                        impulse = signal.unit_impulse(input_sample.shape[0])
                         ab_estimate = signal.lfilter(b,a, impulse)
-                        plt.plot(ab_estimate, label="optimized impulse response", color="red", linestyle="--")
+                        plt.plot(ab_estimate, label="optimized impulse response", color="red", linestyle="--") """
                     plt.xlabel("Time [idx]")
                     plt.ylabel("Intensity [a.u.]")
                     plt.legend()
@@ -609,9 +615,9 @@ class VisualizePredictionCallback(tf.keras.callbacks.Callback):
                     index += 1
                     plt.subplot(num_plots, 1, index)
                     plt.plot(input_sample[:200,2*(self.input_keys.index(input_key))], label=label+" truncated", color="black")
-                    if "a" and "b" in self.input_keys:
-                        plt.plot(ab_estimate[:200], label="Truncated optimized impulse response", color="red", linestyle="--")
-                elif "filtered_signal" in input_key:
+                    """ if "a" and "b" in self.input_keys:
+                        plt.plot(ab_estimate[:200], label="Truncated optimized impulse response", color="red", linestyle="--") """
+                elif "filtered" in input_key:
                     if "fft" not in input_key:
                         filtered_signal = input_sample[:,2*(self.input_keys.index(input_key))]+1j*input_sample[:,2*(self.input_keys.index(input_key))+1]
                         fft_filtered_signal = fft(filtered_signal)
@@ -625,7 +631,7 @@ class VisualizePredictionCallback(tf.keras.callbacks.Callback):
                     elif "augmented_ifft" in self.input_keys:
                         
                         augmented_ifft_index = self.input_keys.index("augmented_ifft")
-                        augmented_fft_from_ifft = fft(input_sample[:,2*augmented_ifft_index]+1j*input_sample[:,2*augmented_ifft_index+1])
+                        augmented_fft_from_ifft = fftshift(fft(input_sample[:,2*augmented_ifft_index]+1j*input_sample[:,2*augmented_ifft_index+1]))
                         plt.plot(ppm, augmented_fft_from_ifft, label="FFT(input)", color="black")
                         
                     plt.plot(ppm, filtered_signal_abs, label=label+" (norm)", color="magenta")
@@ -735,7 +741,7 @@ def ERB(input_tensor, filter1 = 32, kernel_size=3):# Enhanced Residual Block
         return x
 
 
-def ResNet1D(input_shape=(2048, 2), output_shape=(2048, 2), num_blocks=4, filter1=32, kernel_size=3, print_summary=True):
+""" def ResNet1D(input_shape=(2048, 2), output_shape=(2048, 2), num_blocks=4, filter1=32, kernel_size=3, print_summary=True):
     input = Input(shape=input_shape)
     x = input
     signal_length = input_shape[0]
@@ -766,17 +772,124 @@ def ResNet1D(input_shape=(2048, 2), output_shape=(2048, 2), num_blocks=4, filter
             
     outputs = tf.keras.layers.Conv1D(output_shape[-1], kernel_size=1, padding='same', activation='linear')(x)
     model = Model(inputs=input, outputs=outputs)
+    return model """
+    
+def ResNet1D(input_shape=(2048, 2), output_shape=(2048, 2), num_blocks=4, filter1=32, kernel_size=3, print_summary=True):
+    input = Input(shape=input_shape)
+    x = input
+    signal_length = input_shape[0]
+    skip_connection = None
+
+    for i in range(num_blocks):
+        if i == 1:  # Store the output of the early convolutional layer
+            skip_connection = x
+
+        if i < num_blocks // 2 and signal_length > 32:
+            x = conv_block(x, filter1, kernel_size=kernel_size, strides=2)
+            signal_length /= 4
+            if print_summary:
+                print(f"Signal length {i}: {signal_length}")
+        elif i < num_blocks // 2:
+            x = conv_block(x, filter1, kernel_size=kernel_size, strides=1)
+            if print_summary:
+                print(f"Signal length {i}: {signal_length}")
+
+        elif i >= num_blocks // 2 and signal_length >= 32 and signal_length < input_shape[0]:
+            x = convT_block(x, filters=filter1, kernel_size=kernel_size, strides=2)
+            signal_length *= 4
+            if print_summary:
+                print(f"Signal length {i}: {signal_length}")
+        elif i > num_blocks // 2:
+            x = convT_block(x, filters=filter1, kernel_size=kernel_size, strides=1)
+            if print_summary:
+                print(f"Signal length {i}: {signal_length}")
+
+        if i == num_blocks - 2:  # Add the skip connection to the later transposed convolutional layer
+            skip_connection = tf.keras.layers.Conv1D(filters=filter1, kernel_size=1, padding='same')(skip_connection)
+            skip_connection = UpSampling1D(size=4)(skip_connection)  # Upsample to match the shape
+            x = tf.keras.layers.add([x, skip_connection])
+
+        if i % 2 == 0:
+            x = ERB(x, filter1, kernel_size=kernel_size)
+            if print_summary:
+                print(f"ERB at block {i}, signal length: {signal_length}")
+
+    outputs = tf.keras.layers.Conv1D(output_shape[-1], kernel_size=1, padding='same', activation='linear')(x)
+    model = Model(inputs=input, outputs=outputs)
     return model
 ###################################################################################################################
 
+def multi_channel_cnn(input_shape=(2048, 6), output_shape=(2048, 2), num_blocks=4, filter1=32, kernel_size=3, print_summary=True):
+    input = Input(shape=input_shape)
+    x = input
+    signal_length = input_shape[0]
+    skip_connection = None
+
+    for i in range(num_blocks):
+        if i == 1:  # Store the output of the early convolutional layer
+            skip_connection = x
+
+        if i < num_blocks // 2 and signal_length > 32:
+            x = conv_block(x, filter1, kernel_size=kernel_size, strides=2)
+            signal_length //= 4
+            if print_summary:
+                print(f"Signal length {i}: {signal_length}")
+        elif i < num_blocks // 2:
+            x = conv_block(x, filter1, kernel_size=kernel_size, strides=1)
+            if print_summary:
+                print(f"Signal length {i}: {signal_length}")
+
+        elif i >= num_blocks // 2 and signal_length >= 32 and signal_length < input_shape[0]:
+            x = convT_block(x, filters=filter1, kernel_size=kernel_size, strides=2)
+            signal_length *= 4
+            if print_summary:
+                print(f"Signal length {i}: {signal_length}")
+        elif i > num_blocks // 2:
+            x = convT_block(x, filters=filter1, kernel_size=kernel_size, strides=1)
+            if print_summary:
+                print(f"Signal length {i}: {signal_length}")
+
+        if i == num_blocks - 2:  # Add the skip connection to the later transposed convolutional layer
+            skip_connection = tf.keras.layers.Conv1D(filters=filter1, kernel_size=1, padding='same')(skip_connection)
+            skip_connection = UpSampling1D(size=4)(skip_connection)  # Upsample to match the shape
+            x = tf.keras.layers.add([x, skip_connection])
+
+        if i % 2 == 0:
+            x = ERB(x, filter1, kernel_size=kernel_size)
+            if print_summary:
+                print(f"ERB at block {i}, signal length: {signal_length}")
+
+    # Flatten the output for LSTM layers
+    x = Flatten()(x)
+    
+    # Reshape the flattened output to 3D shape for LSTM layers
+    x = Reshape((signal_length, -1))(x)
+    
+    # LSTM layers
+    x = tf.keras.layers.LSTM(64, return_sequences=True)(x)
+    x = tf.keras.layers.LSTM(64)(x)
+    
+    # Dense layers
+    x = Dense(128, activation='relu')(x)
+    x = Dense(64, activation='relu')(x)
+    
+    # Output layer
+    x = Dense(output_shape[-1]*output_shape[0], activation='linear')(x)
+    x = Reshape((output_shape[0], output_shape[-1]))(x)
+    outputs = Conv1D(output_shape[-1], kernel_size=1, padding='same', activation='linear')(x)
+    
+    model = Model(inputs=input, outputs=outputs)
+    return model
+
 def main():
-    # Test of ResNet1D
-    dummy_input = tf.random.normal((1, 2048, 2))
-    model = ResNet1D(num_blocks=20)
-    #model.build(input_shape=(None, 2048, 2))
+    available_devices = tf.config.list_physical_devices('GPU')
+    tf.config.set_visible_devices(available_devices[4], 'GPU')
+    print(f"visible devices: {tf.config.get_visible_devices()}")
+    # Test of multi_channel_cnn
+    dummy_input, _ = load_from_directory("/home/stud/casperc/bhome/Project3_DL_sigpros/generated_data/train", num_signals=1, input_keys= ["augmented_ifft", "a", "b", "filtered_signal"], output_keys=["original", "baseline", "NAA", "Cr", "Cho"])
+    model = multi_channel_cnn(input_shape=(2048, 8), output_shape=(2048, 10), num_blocks=20)
     output = model(dummy_input)
     print(f"Output shape: {output.shape}")
-    
+
 if __name__ == "__main__":
-    # Example usage
     main()

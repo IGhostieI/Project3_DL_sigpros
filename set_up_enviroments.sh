@@ -1,51 +1,32 @@
 #!/bin/bash
-cd /home/Project1\(DeepFit\)/
+#SBATCH --gres=gpu:1
+#SBATCH --partition=gpu 
+#SBATCH --time=02:15:00
+#SBATCH --job-name=set_up_enviroments
+#SBATCH --output=set_up_enviroments.out
+
 # Set up environment
-uenv  verbose miniconda3-py311
 uenv verbose cuda-11.8.0
+uenv verbose cudnn-11.x-8.7.0 
+uenv verbose miniconda3-py310
 
-if ! conda info --envs | grep -q 'pytorch_env_py311'; then
-    echo "Creating environment pytorch_env_py311"
-    conda create -n pytorch_env_py311 python=3.11.5 -y
+# Define the environment name as a variable
+ENV_NAME="test_slurm_tensorflow_env_py310"
+
+if ! conda info --envs | grep -q "$ENV_NAME"; then
+    echo "Creating environment $ENV_NAME"
+    conda create -n "$ENV_NAME" python=3.10 -y
 fi
-conda activate pytorch_env_py311
-pip3 install -r requirements.txt
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+conda activate "$ENV_NAME"
+
+# Install base packages with conda
+conda install -y numpy matplotlib scikit-learn scipy tqdm pydot graphviz packaging pandas pillow -c conda-forge -c anaconda
+
+pip install tensorflow[and-cuda]==2.14.0 tensorflow-addons
+
+# Verify TensorFlow can see the GPU
+python -c "import tensorflow as tf; print('Num GPUs Available: ', len(tf.config.list_physical_devices('GPU')))"
+
 conda deactivate
-
-if ! conda info --envs | grep -q 'tensorflow_env_py311'; then
-    echo "Creating environment tensorflow_env_py311"
-    conda create -n tensorflow_env_py311 python=3.11.5 -y
-fi
-conda activate tensorflow_env_py311
-pip3 install -r requirements.txt
-python3 -m pip install tensorflow[and-cuda]
-conda deactivate
-
-uenv remove cuda-11.8.0
-
-uenv verbose cuda-12.3.2 cudnn-12.x-9.0.0
-# Check if the environment exists, if not, create it
-if ! conda info --envs | grep -q 'slurm_pytorch_env_py311'; then
-    conda create -n slurm_pytorch_env_py311 python=3.11.5 -y
-fi
-
-conda activate slurm_pytorch_env_py311
-pip3 install -r requirements.txt
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-conda deactivate
-
-# Check if the environment exists, if not, create it
-if ! conda info --envs | grep -q 'slurm_tensorflow_env_py311'; then
-    echo "Creating environment slurm_tensorflow_env_py311"
-    conda create -n slurm_tensorflow_env_py311 python=3.11.5 -y
-fi
-conda activate slurm_tensorflow_env_py311
-pip3 install -r requirements.txt
-pip3 install tensorflow[and-cuda]
-conda deactivate
-
-uenv remove cuda-12.3.2 cudnn-12.x-9.0.0
-uenv remove miniconda3-py311
 
 echo "Environment setup complete"

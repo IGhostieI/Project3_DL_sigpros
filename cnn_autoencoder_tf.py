@@ -12,7 +12,7 @@ import numpy as np
 from typing import Tuple, List
 import scipy.stats as stats
 
-from myfunctions_tf import CNN_DenoiseFit_Functional, CNN_Autoencoder_Functional, load_from_directory, make_current_time_directory, VisualizePredictionCallback, make_metadata_file, ResNet1D 
+from myfunctions_tf import CNN_DenoiseFit_Functional, CNN_Autoencoder_Functional, load_from_directory, make_current_time_directory, VisualizePredictionCallback, make_metadata_file, ResNet1D, multi_channel_cnn 
 from tensorflow.keras.utils import plot_model
 
 from datetime import datetime
@@ -35,25 +35,25 @@ print("###########################")
 
 def main():
     available_devices = tf.config.list_physical_devices('GPU')
-    tf.config.set_visible_devices(available_devices[3], 'GPU')
     print(f"visible devices: {tf.config.get_visible_devices()}")
     metadata = {
         "description": "New baseline model with ResNet1D. Input is synthetic FID",
-        "input_key": ["augmented_ifft"], # "augmented_ifft","a", "b", "filtered_signal"
-        "output_key": ["original", "baseline", "NAA", "NAAG", "Cr", "PCr", "PCho", "GPC" ], # NAA
-        "batch_size": 128,
-        "epochs": 400,
-        "optimizer": "SGD", #SGD, RMSprop
-        "learning_rate": 5e-5,
-        "loss": "MeanSquaredError",# "MeanSquaredError", "MeanAbsoluteError", "MeanAbsolutePercentageError", "MeanSquaredLogarithmicError", "CosineSimilarity", "KLDivergence", "Poisson", "Huber", "LogCosh"
-        "early_stopping": 30,
+        "input_key": ["augmented_ifft", "filtered_GABA"], # "augmented_ifft","a", "b", "filtered_full", "filtered_GABA"
+        "output_key": ["original", "baseline", "NAA", "NAAG", "Cr", "PCr", "PCho", "GPC", "GABA", "Gln", "Glu" ], # NAA
+        "batch_size": 32,
+        "epochs": 50,
+        "optimizer": "RMSprop", #SGD, RMSprop, Adam, Adadelta, Adagrad, Adamax, Nadam, Ftrl
+        "learning_rate": 1e-3,
+        "loss": "Huber",# "MeanSquaredError", "MeanAbsoluteError", "MeanAbsolutePercentageError", "MeanSquaredLogarithmicError", "CosineSimilarity", "KLDivergence", "Poisson", "Huber", "LogCosh"
+        "early_stopping": 15,
         "train_data": -1, # -1 means all data - Updated to the actual number of data after loading
-        "validation_data": -1 # -1 means all data - Updated to the actual number of data after loading
+        "validation_data": -1, # -1 means all data - Updated to the actual number of data after loading
+        "num_blocks": 20
     }
 
     # load and prepare data
-    train_path = "/home/stud/casperc/bhome/Project1(DeepFit)/generated_data/train_TE30_lw10_plain"
-    val_path = "/home/stud/casperc/bhome/Project1(DeepFit)/generated_data/val_TE30_lw10_plain"
+    train_path = "/home/stud/casperc/bhome/Project3_DL_sigpros/generated_data/train_2"
+    val_path = "/home/stud/casperc/bhome/Project3_DL_sigpros/generated_data/val_2"
 
     train_input, train_output = load_from_directory(train_path, num_signals=metadata["train_data"], input_keys=metadata["input_key"], output_keys=metadata["output_key"], complex_data=True)
     validation_input, validation_output = load_from_directory(val_path, num_signals=metadata["validation_data"], input_keys=metadata["input_key"], output_keys=metadata["output_key"], complex_data=True)
@@ -65,15 +65,16 @@ def main():
     validation_dataset = tf.data.Dataset.from_tensor_slices((validation_input, validation_output)).batch(batch_size=metadata["batch_size"])
     
     # create save directory
-    main_folder_path = os.path.join(os.getcwd(), "tf_experiments/Final_Experiments")
-    path = make_current_time_directory(main_folder_path=main_folder_path, data_description=f"{metadata['input_key'][:]}_{metadata['output_key'][:]}_ResNet1D_{metadata['optimizer']}", make_logs_dir=True)
+    os.makedirs(os.path.join(os.getcwd(), "tf_experiments"), exist_ok=True)
+    main_folder_path = os.path.join(os.getcwd(), "tf_experiments")
+    path = make_current_time_directory(main_folder_path=main_folder_path, data_description=f"{metadata['input_key'][:]}_{metadata['output_key'][:]}_ResNet1D_{metadata['optimizer']}_{metadata['loss']}", make_logs_dir=True)
     log_dir = os.path.join(path, "logs")
     
     
     loss_object = tf.keras.losses.MeanSquaredError()
     optimizer = tf.keras.optimizers.Adam(learning_rate=metadata["learning_rate"])
 
-    metrics = ["mse"]
+    metrics = ["mse"] # , tf.keras.metrics.KLDivergence(), tf.keras.metrics.R2Score()]
     
     callbacks = [
         tf.keras.callbacks.EarlyStopping(patience=metadata["early_stopping"], monitor="val_loss", mode='min', restore_best_weights=True,verbose=1),
@@ -82,10 +83,10 @@ def main():
         ]
     
     # build model
-    model = ResNet1D(num_blocks=20, kernel_size=8, input_shape=(2048,2*len(metadata["input_key"])), output_shape=(2048,2*len(metadata["output_key"])))
+    #model = ResNet1D(num_blocks=20, kernel_size=16, input_shape=(2048,2*len(metadata["input_key"])), output_shape=(2048,2*len(metadata["output_key"])))
+    model = multi_channel_cnn(num_blocks=metadata["num_blocks"], kernel_size=16, input_shape=(2048,2*len(metadata["input_key"])), output_shape=(2048,2*len(metadata["output_key"])))
     # compile model
-    model.compile(optimizer=optimizer, loss=loss_object, metrics=metrics)
-    plot_model(model, to_file=os.path.join(path, "model.png"), show_shapes=True, show_layer_names=True)
+    model.compile(optimizer=metadata["optimizer"], loss=metadata["loss"], metrics=metrics)
     # train model
     print("\nTraining Starts....................")
     start = time.perf_counter()
