@@ -48,7 +48,10 @@ def main():
         "early_stopping": 15,
         "train_data": -1, # -1 means all data - Updated to the actual number of data after loading
         "validation_data": -1, # -1 means all data - Updated to the actual number of data after loading
-        "num_blocks": 20
+        "num_blocks": 20,
+        "kernel_size": 16,
+        "num_filters": 32,
+        "training_time": "Not yet trained"
     }
 
     # load and prepare data
@@ -84,7 +87,7 @@ def main():
     
     # build model
     #model = ResNet1D(num_blocks=20, kernel_size=16, input_shape=(2048,2*len(metadata["input_key"])), output_shape=(2048,2*len(metadata["output_key"])))
-    model = multi_channel_cnn(num_blocks=metadata["num_blocks"], kernel_size=16, input_shape=(2048,2*len(metadata["input_key"])), output_shape=(2048,2*len(metadata["output_key"])))
+    model = multi_channel_cnn(num_blocks=metadata["num_blocks"], kernel_size=metadata["kernel_size"], input_shape=(2048,2*len(metadata["input_key"])), output_shape=(2048,2*len(metadata["output_key"])), filter1=metadata["num_filters"])
     # compile model
     model.compile(optimizer=metadata["optimizer"], loss=metadata["loss"], metrics=metrics)
     # train model

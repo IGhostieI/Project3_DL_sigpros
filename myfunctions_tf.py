@@ -56,6 +56,42 @@ def read_complex_raw(filename:str, shift_fft:bool=True)->Tuple[np.array, np.arra
             imaginary_data = fftshift(imaginary_data)
     return real_data, imaginary_data
 
+def model_input_output_prep(data_dict, input_keys, output_keys=None, complex_data=True):
+    input_data = []
+    output_data = []
+    for input_key in input_keys:
+        loaded_input = data_dict[input_key]
+        if input_key == "a" or input_key == "b":
+            loaded_input = np.pad(loaded_input, (0, 2048-len(loaded_input)), mode="constant", constant_values=0)
+        real_part_input = loaded_input.real
+        imag_part_input = loaded_input.imag
+        if complex_data:
+            input_data.append(np.array(real_part_input).T)
+            input_data.append(np.array(imag_part_input).T)
+        else:
+            input_data.append(np.array(real_part_input).T)
+    
+    for output_key in output_keys:
+        try :
+            loaded_output = data_dict[output_key]
+        except:
+            print(f"Output key {output_key} not found")
+            continue
+        real_part_output = loaded_output.real
+        imag_part_output = loaded_output.imag
+        if complex_data:
+            output_data.append(np.array(real_part_output).T)
+            output_data.append  (np.array(imag_part_output).T)
+        else:
+            output_data.append(real_part_output)
+    """ input_data.append(np.array(input_data).T)  # Transpose to get (2048, 2*len(input_keys))
+    output_data.append(np.array(output_data).T)  # Transpose to get (2048, 2*len(output_keys)) """
+    input_data = np.array(input_data).T
+    output_data = np.array(output_data).T
+    print(f"Loaded input shape: {input_data.shape}, Loaded output shape: {output_data.shape}")
+    
+    return np.expand_dims(input_data, axis=0), np.expand_dims(output_data, axis=0)
+
 def load_from_directory(path:str, num_signals:int=-1, input_keys:List[str]=["augmented"], output_keys:List[str]=["original"], complex_data:bool=True, data_format:str="npz") -> Tuple[np.array, np.array]:
     files = [f for f in os.listdir(path) if f.endswith(f'.{data_format}')]
     input_data = []
