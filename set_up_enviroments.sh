@@ -11,7 +11,7 @@ uenv verbose cudnn-11.x-8.7.0
 uenv verbose miniconda3-py310
 
 # Define the environment name as a variable
-ENV_NAME="test_slurm_tensorflow_env_py310"
+ENV_NAME="test_tf"
 
 if ! conda info --envs | grep -q "$ENV_NAME"; then
     echo "Creating environment $ENV_NAME"

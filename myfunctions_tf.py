@@ -2,7 +2,6 @@ import os
 
 import numpy as np
 from typing import Tuple, List
-import scipy.special
 import scipy.stats as stats
 import scipy
 import scipy.signal as signal
@@ -10,6 +9,9 @@ from scipy.fft import fft, ifft, fftshift
 from scipy.optimize import minimize
 import matplotlib 
 import matplotlib.pyplot as plt
+from matplotlib.legend_handler import HandlerBase
+from matplotlib.lines import Line2D
+from matplotlib import rc
 import re #Regular expressions library
 
 
@@ -23,8 +25,131 @@ plt.rcParams['lines.linewidth'] = 2  # Set the desired linewidth value
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Flatten, Conv1D, Conv1DTranspose, MaxPooling1D, Input, UpSampling1D, BatchNormalization, Activation, Reshape
 from tensorflow.keras import Model
+
 from datetime import datetime
 import random
+
+def huber_cosine_loss(y_true, y_pred, delta=1.0, alpha=0.5):
+    """
+    Custom loss function combining Huber loss and cosine similarity.
+    
+    Parameters:
+    -----------
+    y_true : tf.Tensor
+        Ground truth values
+    y_pred : tf.Tensor
+        Predicted values
+    delta : float, optional
+        Threshold for Huber loss (default: 1.0)
+    alpha : float, optional
+        Weight parameter between Huber (alpha) and cosine loss (1-alpha)
+        alpha=1.0 means pure Huber loss, alpha=0.0 means pure cosine loss
+        
+    Returns:
+    --------
+    tf.Tensor
+        Weighted combination of Huber loss and cosine similarity loss
+    """
+    # Compute Huber loss
+    huber = tf.keras.losses.Huber(delta=delta)(y_true, y_pred)
+    
+    # Reshape tensors for cosine similarity if needed
+    # Assuming inputs are [batch_size, time_points, channels]
+    y_true_flat = tf.reshape(y_true, [tf.shape(y_true)[0], -1])
+    y_pred_flat = tf.reshape(y_pred, [tf.shape(y_pred)[0], -1])
+    
+    # Compute cosine similarity
+    # Using the negative of cosine_similarity since we want to minimize loss
+    # (cosine_similarity measures similarity, higher is better)
+    norm_true = tf.nn.l2_normalize(y_true_flat, axis=1)
+    norm_pred = tf.nn.l2_normalize(y_pred_flat, axis=1)
+    cosine_sim = tf.reduce_sum(norm_true * norm_pred, axis=1)
+    cosine_loss = 1.0 - cosine_sim  # Convert to loss (0 is best)
+    
+    # Reduce to scalar if needed
+    cosine_loss = tf.reduce_mean(cosine_loss)
+    
+    # Linear combination
+    combined_loss = alpha * huber + (1.0 - alpha) * cosine_loss
+    
+    return combined_loss
+
+# Create a Keras-compatible loss function class
+class HuberCosineLoss(tf.keras.losses.Loss):
+    def __init__(self, delta=1.0, alpha=0.5, **kwargs):
+        super().__init__(**kwargs)
+        self.delta = delta
+        self.alpha = alpha
+        
+    def call(self, y_true, y_pred):
+        return huber_cosine_loss(y_true, y_pred, self.delta, self.alpha)
+    
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            'delta': self.delta,
+            'alpha': self.alpha
+        })
+        return config
+
+
+def read_LCModel_table(file_path: str, metabolites: List) -> dict:
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+    metabolite_dict = {}
+    
+    for metabolite in metabolites:
+        for line in lines:
+            # Use regex to check for exact metabolite match at beginning of string or after space
+            pattern = r'(^|\s)' + re.escape(metabolite) + r'(\s|$)'
+            if re.search(pattern, line) and ("/" not in line and "=" not in line):
+                metabolite = metabolite.strip()
+                metabolite_dict[metabolite] = {}
+                # Use regex to handle cases with no spaces between values and metabolite names
+                match = re.match(r"([\d.Ee+-]+)\s*([\d%]+)\s*([\d.Ee+-]+)\s*([\w+]+)", line.strip())
+                if match:
+                    metabolite_dict[metabolite]["conc"] = float(match.group(1))
+                    metabolite_dict[metabolite]["%SD"] = float(match.group(2).strip("%"))
+                    metabolite_dict[metabolite]["/Cr+PCr"] = float(match.group(3))
+    return metabolite_dict
+
+def postprocess_predicted_data(predicted_data: np.ndarray, output_keys: List[str]) -> dict:
+    output_dict = {}
+    for i, key in enumerate(output_keys):
+        output_dict[f"{key}"] = predicted_data[:, 2*i]+ 1j*predicted_data[:, 2*i+1]
+    return output_dict
+
+class MultiColorLegendHandler(HandlerBase):
+    """
+    A custom legend handler for multicolored lines in the legend.
+    """
+    def __init__(self, colormap='viridis', num_segments=9, linestyle='-', linewidth=2):
+        super().__init__()
+        self.colormap = plt.get_cmap(colormap)
+        self.num_segments = num_segments
+        self.linestyle = linestyle
+        self.linewidth = linewidth
+
+    def create_artists(self, legend, orig_handle, x0, y0, width, height, fontsize, trans):
+        segment_width = width / self.num_segments
+        segments = []
+        colors = [self.colormap(i / (self.num_segments - 1)) for i in range(self.num_segments)]
+
+        for i in range(self.num_segments):
+            start_x = x0 + i * segment_width
+            end_x = start_x + segment_width
+            # Ensure the last segment ends exactly at the total width
+            if i == self.num_segments - 1:
+                end_x = x0 + width
+            segments.append(Line2D(
+                [start_x, end_x],
+                [y0 + height / 2, y0 + height / 2],
+                color=colors[i],
+                linestyle=self.linestyle,
+                linewidth=self.linewidth,
+                transform=trans
+            ))
+        return segments
 
 def extract_bracket_content(string: str) -> List[str]:
     pattern = re.compile(r'\[([^\]]+)\]')
@@ -92,6 +217,8 @@ def model_input_output_prep(data_dict, input_keys, output_keys=None, complex_dat
     
     return np.expand_dims(input_data, axis=0), np.expand_dims(output_data, axis=0)
 
+
+
 def load_from_directory(path:str, num_signals:int=-1, input_keys:List[str]=["augmented"], output_keys:List[str]=["original"], complex_data:bool=True, data_format:str="npz") -> Tuple[np.array, np.array]:
     files = [f for f in os.listdir(path) if f.endswith(f'.{data_format}')]
     input_data = []
@@ -119,7 +246,7 @@ def load_from_directory(path:str, num_signals:int=-1, input_keys:List[str]=["aug
                 file_input_data.extend([real_part_input, imag_part_input])
             else:
                 file_input_data.append(real_part_input)
-        
+ 
         for output_key in output_keys:
             try :
                 loaded_output = loaded_data[output_key]
@@ -142,14 +269,73 @@ def load_from_directory(path:str, num_signals:int=-1, input_keys:List[str]=["aug
     
     return input_data, output_data
 
+def load_NPZ_from_list(path_list, input_keys:List[str]=["augmented"], output_keys:List[str]=["original"], complex_data:bool=True, data_format:str="npz") -> Tuple[np.array, np.array]:
+    input_data = []
+    output_data = []
+    
+    
+    for path in path_list:
+        file_input_data = []
+        file_output_data = []
+        
+        if data_format == "mat":
+            loaded_data = scipy.io.loadmat(path)
+        elif data_format == "npz":
+            loaded_data = np.load(path, allow_pickle=True)
+        
+        for input_key in input_keys:
+            loaded_input = loaded_data[input_key]
+            if input_key == "a" or input_key == "b":
+                loaded_input = np.pad(loaded_input, (0, 2048-len(loaded_input)), mode="constant", constant_values=0)
+            real_part_input = loaded_input.real
+            imag_part_input = loaded_input.imag
+            if complex_data:
+                file_input_data.extend([real_part_input, imag_part_input])
+            else:
+                file_input_data.append(real_part_input)
+        
+        for output_key in output_keys:
+            try :
+                loaded_output = loaded_data[output_key]
+            except:
+                print(f"Output key {output_key} not found in file {path}")
+                continue
+            real_part_output = loaded_output.real
+            imag_part_output = loaded_output.imag
+            if complex_data:
+                file_output_data.extend([real_part_output, imag_part_output])
+            else:
+                file_output_data.append(real_part_output)
+        
+        input_data.append(np.array(file_input_data).T)  # Transpose to get (2048, 2*len(input_keys))
+        output_data.append(np.array(file_output_data).T)  # Transpose to get (2048, 2*len(output_keys))
+    
+    input_data = np.array(input_data)
+    output_data = np.array(output_data)
+    print(f"Loaded input shape: {input_data.shape}, Loaded output shape: {output_data.shape}")
+    
+    return input_data, output_data
 
-def load_mrui_txt_data(filename:str)->Tuple[np.array, np.array, np.array, np.array]:
+
+def load_mrui_txt_data(filename:str)->Tuple[np.array, np.array, dict]:
+    """_summary_
+
+    Args:
+        filename (str): _description_
+
+    Returns:
+        
+        sig (np.array): _description_
+        fft (np.array): _description_
+        metadata (dict): _description_
+        
+    """
     with open(filename, "r") as mrui:
         text = mrui.read().split("\n")
         data = text[text.index("sig(real)	sig(imag)	fft(real)	fft(imag)")+2:]
         metadata = text[:text.index("sig(real)	sig(imag)	fft(real)	fft(imag)")-4]
         metadata = [line.replace(" ","").split(":") for line in metadata if re.search(r": .+", line)]
-        metadata = {line[0]:line[1] for line in metadata}
+        metadata = {line[0]:line[1].lstrip().replace("\n","") for line in metadata}
         
         data = [line.lstrip() for line in data]
         data = [line for line in data if line!=""]
@@ -240,37 +426,58 @@ def create_baseline_V2(input_range:np.ndarray, std_range:Tuple[float, float]=(0,
         baseline += gaussian
     return baseline
 
-def read_LCModel_coord(filename, length=1048):
+def read_LCModel_coord(filename:str)->Tuple[np.array, np.array, np.array, np.array]:
+    """_summary_
+
+    Args:
+        filename (str): _description_
+
+    Raises:
+        ValueError: _description_
+
+    Returns:
+        
+        freq (np.array): _description_
+        data (np.array): _description_
+        fit (np.array): _description_
+        baseline (np.array): _description_
+    """
     with open(filename, "r") as coord:
-        step_size = length//10+1
         text = coord.read().split("\n")
-        start_val = 47
-        end_val = start_val+step_size 
+        # Find the first line that ends with " NY"
+        text_array = np.array(text)
+        index = np.where(np.char.endswith(text_array, " NY"))[0]
+        if len(index) == 0:
+            raise ValueError("No line ending with ' NY' found in the file.")
+        
+        # Extract the line and process it
+        line = text_array[index[0]]  # Get the first matching line
+        length = int(line.lstrip().split(" ")[0])  # Extract the number at the start of the line
+        
+        step_size = length // 10 + 1
+        start_val = index[0] + 1  # Use the first match and add 1
+        end_val = start_val + step_size
         freq = [line.lstrip() for line in text[start_val:end_val]]
         freq = [re.sub(r"\s+", " ", line).split(" ") for line in freq]
         #print(f"freq from: {start_val} - {end_val}")
-        start_val = end_val+1
-        end_val = start_val+step_size
+        #print(f"freq: {freq[-1]}")
+        start_val = end_val + 1
+        end_val = start_val + step_size
         data = [line.lstrip() for line in text[start_val:end_val]]
         data = [re.sub(r"\s+", " ", line).split(" ") for line in data]
-        #print(f"data from: {start_val} - {end_val}")
-        start_val = end_val+1
-        end_val = start_val+step_size
-        fit = [line.lstrip()for line in text[start_val:end_val]]
+        start_val = end_val + 1
+        end_val = start_val + step_size
+        fit = [line.lstrip() for line in text[start_val:end_val]]
         fit = [re.sub(r"\s+", " ", line).split(" ") for line in fit]
-        start_val = end_val+1
-        end_val = start_val+step_size
-        #print(f"fit from: {start_val} - {end_val}")
+        start_val = end_val + 1
+        end_val = start_val + step_size
         baseline = [line.lstrip() for line in text[start_val:end_val]]
         baseline = [re.sub(r"\s+", " ", line).split(" ") for line in baseline]
-        baseline = np.array(flatten_list(baseline),dtype=float)
+        baseline = np.array(flatten_list(baseline), dtype=float)
         
-        #print(f"baseline from: {start_val} - {end_val}")
-        
-        freq = np.array(flatten_list(freq),dtype=float)
-        data = np.array(flatten_list(data),dtype=float)
-        
-        fit = np.array(flatten_list(fit),dtype=float)
+        freq = np.array(flatten_list(freq), dtype=float)
+        data = np.array(flatten_list(data), dtype=float)
+        fit = np.array(flatten_list(fit), dtype=float)
         
     return freq, data, fit, baseline
 
@@ -334,7 +541,7 @@ def BPF_ppm(fft_signal:np.ndarray[np.complex64], ppm_range:np.ndarray[np.float32
     
     b, a = signal.iirdesign(wp=wp, ws=ws, gpass=1, gstop=60, ftype=ftype)
     
-    _, complex_response = signal.freqz(b, a, worN=2048)
+    _, complex_response = signal.freqz(b, a, worN=len(fft_signal))
     complex_response*=gain_passband
     fft_filtered_signal = fft_signal * complex_response # filtering in frequency domain
     filtered_signal = ifft(fft_filtered_signal)
@@ -745,7 +952,7 @@ class VisualizePredictionCallback(tf.keras.callbacks.Callback):
 ###################################################################################################################
 def conv_1D_block(x, filters, kernel_size=3, strides=1):
     # 1D Convolutional block + Batch Normalization + ReLU Activation
-    x=Conv1D(filters, kernel_size, strides=strides, padding='same')(x)
+    x=Conv1D(filters, kernel_size, strides=strides, padding='same')(x) # fix activation and BatchNormalization
     x = BatchNormalization()(x)
     x = Activation('relu')(x)
     return x
@@ -757,8 +964,8 @@ def conv_block(x, filters, kernel_size, strides=1):
 
 def conv_1D_transpose_block(x, filters, kernel_size, strides=1):
     # 1D Convolutional Transpose block + Batch Normalization + ReLU Activation
-    x = Conv1DTranspose(filters, kernel_size, strides=strides, padding='same')(x)
-    x = BatchNormalization()(x)
+    x = Conv1DTranspose(filters, kernel_size, strides=strides, padding='same')(x) # fix activation and BatchNormalization
+    x = BatchNormalization()(x) # consider removal
     x = Activation('relu')(x)
     return x 
 

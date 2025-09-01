@@ -38,12 +38,12 @@ def main():
     print(f"visible devices: {tf.config.get_visible_devices()}")
     metadata = {
         "description": "New baseline model with ResNet1D. Input is synthetic FID",
-        "input_key": ["augmented_ifft", "filtered_GABA"], # "augmented_ifft","a", "b", "filtered_full", "filtered_GABA"
+        "input_key": ["filtered_full"], # "augmented_ifft","a", "b", "filtered_full", "filtered_GABA"
         "output_key": ["original", "baseline", "NAA", "NAAG", "Cr", "PCr", "PCho", "GPC", "GABA", "Gln", "Glu" ], # NAA
         "batch_size": 32,
         "epochs": 50,
         "optimizer": "RMSprop", #SGD, RMSprop, Adam, Adadelta, Adagrad, Adamax, Nadam, Ftrl
-        "learning_rate": 1e-3,
+        "learning_rate": 1e-5,
         "loss": "Huber",# "MeanSquaredError", "MeanAbsoluteError", "MeanAbsolutePercentageError", "MeanSquaredLogarithmicError", "CosineSimilarity", "KLDivergence", "Poisson", "Huber", "LogCosh"
         "early_stopping": 15,
         "train_data": -1, # -1 means all data - Updated to the actual number of data after loading
@@ -72,12 +72,12 @@ def main():
     main_folder_path = os.path.join(os.getcwd(), "tf_experiments")
     path = make_current_time_directory(main_folder_path=main_folder_path, data_description=f"{metadata['input_key'][:]}_{metadata['output_key'][:]}_ResNet1D_{metadata['optimizer']}_{metadata['loss']}", make_logs_dir=True)
     log_dir = os.path.join(path, "logs")
-    
-    
-    loss_object = tf.keras.losses.MeanSquaredError()
-    optimizer = tf.keras.optimizers.Adam(learning_rate=metadata["learning_rate"])
 
-    metrics = ["mse"] # , tf.keras.metrics.KLDivergence(), tf.keras.metrics.R2Score()]
+
+    metrics = [
+    "mse",                           # Mean Squared Error
+    "mae"
+    ]
     
     callbacks = [
         tf.keras.callbacks.EarlyStopping(patience=metadata["early_stopping"], monitor="val_loss", mode='min', restore_best_weights=True,verbose=1),
