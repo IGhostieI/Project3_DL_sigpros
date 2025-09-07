@@ -27,12 +27,12 @@ def main():
     linewidths = [3, 5, 7, 10]
     TEs = [20, 30, 40]
     base_path = os.getcwd()
-    num_spectra = 10
+    num_spectra = 200
     
     ppm_range = (12.528, -3.121)
     ppm_jitter_range = (-0.03, 0.03)
     now = time.strftime("%Y_%m_%d-%H_%M_%S")
-    optimization = True
+    optimization = False
     if optimization:
         iir_order = 60
         optimizer_options = {'method':'SLSQP', 'ftol':1e-3, 'maxiter':50}
@@ -51,7 +51,7 @@ def main():
     os.makedirs(os.path.join(base_path, save_folder), exist_ok=True)
     for TE in TEs:
         for linewidth in linewidths:
-            raw_files_path = f"/home/stud/casperc/bhome/Project3_DL_sigpros/DL_basis_sets/TE{TE}_lw{linewidth:02d}"
+            raw_files_path = f"/home/stud/casperc/bhome/Project3_DL_sigpros/DL_basis_sets_corrected/TE{TE}_lw{linewidth:02d}"
             TE_lw = f"TE{TE}_lw{linewidth:02d}"
             # Ensure the save folder exists
             print(f"Creating folder {save_folder}/{TE_lw}")
@@ -62,11 +62,18 @@ def main():
 
             # Define metabolite concentration ranges
             metabolite_concentrations = {
-                "Ala": (0.1, 1.5), "Asp": (1.0, 2.0), "Cr": (4.0, 7.0), "GABA": (2.0, 3.0), "Glc": (1.0, 2.0),
-                "Gln": (2.0, 5.0), "Glu": (4.0, 6.0), "GPC": (0.5, 2.0), "GSH": (1.5, 3.0), "Lac": (0.2, 1.0),
-                "mI": (4.0, 7.0), "NAA": (7.5, 10), "NAAG": (0.5, 2.5), "PCho": (0.5, 2.0), "PCr": (1.0, 3), "Tau": (0.5, 1.25), "Gly":(1.0, 2.0) #Check the values
-            }
-            raw_files = [file for file in raw_files if ".txt" in file and file.removesuffix(".txt") in metabolite_concentrations.keys()]
+                                        "NAA": (8.0, 10.5), "NAAG": (0.5, 1.5),
+                                        "Cr": (3.0, 4.5),   "PCr": (3.5, 4.5),
+                                        "GPC": (0.40, 0.80), "PCho": (0.30, 0.70),
+                                        "Glu": (7.0, 11.0), "Gln": (1.5, 3.0),
+                                        "mI": (2.5, 4.0),   "GSH": (1.0, 2.5),
+                                        "GABA": (1.0, 2.0), "Glc": (0.5, 1.5),
+                                        "Tau": (0.8, 1.6),  "Gly": (0.2, 0.6),
+                                        "Asp": (0.8, 1.5),  "Ala": (0.05, 0.30),
+                                        "Lac": (0.2, 1.0)
+                                    }
+
+            raw_files = [file for file in raw_files if file.removesuffix(".npz") in metabolite_concentrations.keys()]
             # metabolite_concentrations_brain_cancer = {}
             # metabolite_concentrations_prostate = {}
 
@@ -89,14 +96,13 @@ def main():
                 # Loop over each raw file
                 for raw_file in raw_files:
                     # Read the real and imaginary parts of the raw spectrum
-                    _, metabolite_raw, _ = load_mrui_txt_data(os.path.join(base_path, raw_files_path, raw_file))
-                    metabolite_raw = fftshift(metabolite_raw)
+                    metabolite_raw = np.load(os.path.join(base_path, raw_files_path, raw_file))["spec"]
                     real = metabolite_raw.real
                     imag = metabolite_raw.imag
                     # Calculate the area under the curve (AUC) of the metabolite spectrum
                     AUC_metabolite = np.sum(abs(np.sqrt(real**2 + imag**2)))
                     # Get the current metabolite name from the file name
-                    current_metabolite = raw_file.replace(".txt", "")
+                    current_metabolite = raw_file.replace(".npz", "")
                     if current_metabolite != "Cr":
                         real, imag = frequency_shift_jitter(complex_data=(real, imag), ppm_range=ppm_range, ppm_jitter_range=ppm_jitter_range)                       
                     # Normalize the spectrum and scale it by a random factor within the metabolite concentration range
@@ -116,7 +122,7 @@ def main():
                     total_imag += ref_imag
                 original = total_real.copy() + 1j*total_imag.copy()  
                 # Add Gaussian noise to the spectra
-                SNR = np.random.uniform(3, 10)
+                SNR = np.random.uniform(7.5, 50)
                 total_real_augmented, total_imag_augmented = add_gauss_noise_from_wanted_SNR(total_real, total_imag, SNR)
 
                 # Create a baseline and add it to the augmented spectra
