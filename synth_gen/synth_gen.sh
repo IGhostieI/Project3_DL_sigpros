@@ -7,5 +7,5 @@
 uenv verbose miniconda3-py310
 conda activate slurm_tensorflow_env_py310
 
-python -u synthetic_augmented_data_generation_standard_amplitude.py
+python -u /home/stud/casperc/bhome/Project3_DL_sigpros/synthetic_augmented_data_generation_standard_amplitude.py
 echo "Done with the job"

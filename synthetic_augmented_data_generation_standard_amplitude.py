@@ -27,7 +27,7 @@ def main():
     linewidths = [3, 5, 7, 10]
     TEs = [20, 30, 40]
     base_path = os.getcwd()
-    num_spectra = 200
+    num_spectra = 100
     
     ppm_range = (12.528, -3.121)
     ppm_jitter_range = (-0.03, 0.03)
@@ -63,14 +63,15 @@ def main():
             # Define metabolite concentration ranges
             metabolite_concentrations = {
                                         "NAA": (8.0, 10.5), "NAAG": (0.5, 1.5),
-                                        "Cr": (3.0, 4.5),   "PCr": (3.5, 4.5),
-                                        "GPC": (0.40, 0.80), "PCho": (0.30, 0.70),
-                                        "Glu": (7.0, 11.0), "Gln": (1.5, 3.0),
-                                        "mI": (2.5, 4.0),   "GSH": (1.0, 2.5),
-                                        "GABA": (1.0, 2.0), "Glc": (0.5, 1.5),
-                                        "Tau": (0.8, 1.6),  "Gly": (0.2, 0.6),
-                                        "Asp": (0.8, 1.5),  "Ala": (0.05, 0.30),
-                                        "Lac": (0.2, 1.0)
+                                        "Cr": (4.0, 5.0),   
+                                        "PCr": (3.0, 4.0),
+                                        "GPC": (0.5, 1.2), "PCho": (0.5, 1.2),
+                                        "Glu": (7.0, 11.0), "Gln": (1.5, 4.0),
+                                        "mI": (3.5, 5.5),   "GSH": (1.0, 2.5),
+                                        "GABA": (1.0, 2.0), "Glc": (1.0, 2.0),
+                                        "Tau": (0.8, 1.8),  "Gly": (0.3, 0.8),
+                                        "Asp": (0.5, 1.5),  "Ala": (0.05, 0.30),
+                                        "Lac": (0.0, 1.0)
                                     }
 
             raw_files = [file for file in raw_files if file.removesuffix(".npz") in metabolite_concentrations.keys()]
