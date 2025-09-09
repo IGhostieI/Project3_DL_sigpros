@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 from matplotlib.legend_handler import HandlerBase
 from matplotlib.lines import Line2D
 from matplotlib import rc
+from scipy.interpolate import CubicSpline
+from scipy.stats import norm
 import re #Regular expressions library
 
 
@@ -345,7 +347,7 @@ def load_mrui_txt_data(filename:str)->Tuple[np.array, np.array, dict]:
         fft_real = data[:,2]
         fft_imag = data[:,3]
     return sig_real+1j*sig_imag, fft_real + 1j*fft_imag, metadata    
-        
+
         
 def make_current_time_directory(main_folder_path:str, data_description:str, make_logs_dir:bool=True)->str:
     now = datetime.now()
@@ -391,6 +393,7 @@ def add_gauss_noise_from_wanted_SNR(real_component:np.ndarray, imaginary_compone
     SD = np.max(abs(np.sqrt(real_component**2+imaginary_component**2)))/SNR
     noise = np.random.normal(0, SD, len(real_component))
     return real_component+noise, imaginary_component+noise
+
 
 def create_baseline(input_range:np.ndarray, std_range:Tuple[float, float]=(0,1), n_gaussians:int=1, amplitude_range:Tuple[float, float]=(1,1))->np.ndarray:
     n_points = len(input_range)
@@ -1124,6 +1127,107 @@ def multi_channel_cnn(input_shape=(2048, 6), output_shape=(2048, 2), num_blocks=
     model = Model(inputs=input, outputs=outputs)
     return model
 
+### BASELINE NEW ###
+# --- helpers ---
+def _fourier_baseline(x_ppm, amp, max_cycles=2, rng=None):
+    rng = rng or np.random.default_rng()
+    t = (x_ppm - x_ppm.min()) / (x_ppm.ptp() or 1.0)
+    b = np.zeros_like(t)
+    K = rng.integers(1, max_cycles+1)          # 1..max_cycles
+    for k in range(1, K+1):
+        ak = amp * rng.uniform(0.4, 1.0) / (k**2)
+        ph = rng.uniform(0, 2*np.pi)
+        b += ak * np.cos(2*np.pi*k*t + ph)
+    b += rng.uniform(-0.02, 0.02) * amp * (t - 0.5)   # tiny slope
+    return b
+
+def _spline_baseline(x_ppm, amp, n_knots=6, rng=None):
+    rng = rng or np.random.default_rng()
+    knots = np.linspace(x_ppm.min(), x_ppm.max(), n_knots)
+    yk = amp * rng.normal(0, 0.6, size=n_knots)
+    yk[0] *= 0.2; yk[-1] *= 0.2
+    cs = CubicSpline(knots, yk, bc_type="natural")
+    b = cs(x_ppm)
+    b += rng.uniform(-0.02, 0.02) * amp * (x_ppm - x_ppm.mean())  # tiny slope
+    return b
+
+def _broad_gaussians(x_ppm, amp, n=1, std_ppm=(1.0, 2.0), rng=None):
+    rng = rng or np.random.default_rng()
+    b = np.zeros_like(x_ppm, dtype=float)
+    for _ in range(n):
+        loc = rng.uniform(x_ppm.min()+0.5, x_ppm.max()-0.5)        # avoid edges
+        std = rng.uniform(*std_ppm)
+        gamp = rng.uniform(0.4, 1.0) * amp                          # <= drift amp
+        b += gamp * norm.pdf(x_ppm, loc=loc, scale=std)
+    return b
+
+def _clamp_and_debias(b, max_abs):
+    b = np.clip(b, -max_abs, max_abs)
+    return b - b.mean()
+
+# --- main: realistic baseline generator ---
+def random_baseline_realistic(
+    x_ppm: np.ndarray,
+    ref_peak_height: float,
+    rng: np.random.Generator | None = None,
+    severity_probs=(0.6, 0.3, 0.1),
+    method_probs=(0.5, 0.5),         # (Fourier, Spline)
+    add_gauss_prob=0.6,              # chance to add broad hump(s)
+    gauss_count_range=(1, 2),        # 1–2 humps when used
+    clamp_frac=0.25                   # cap |baseline| <= 25% of peak height
+):
+    """
+    Returns (b_real, b_imag, params)
+    - b_real: smooth drift +/- broad hump(s)
+    - b_imag: milder version (30–50% of real), same shape + small extra phase-noise drift
+    """
+    rng = rng or np.random.default_rng()
+
+    # choose severity → amplitude as fraction of ref peak height
+    severity = rng.choice(["mild","moderate","strong"], p=severity_probs)
+    if severity == "mild":
+        drift_frac  = rng.uniform(5e-3, 7e-3)
+        global_scale = rng.uniform(0.07, 0.1)
+    elif severity == "moderate":
+        drift_frac  = rng.uniform(7e-3, 1.5e-2)
+        global_scale = rng.uniform(0.1, 0.15)
+    else:
+        drift_frac  = rng.uniform(0.12, 0.17)
+        global_scale = rng.uniform(0.55, 1.00)
+
+    drift_amp = drift_frac * ref_peak_height
+
+    # choose method
+    method = rng.choice(["fourier","spline"], p=method_probs)
+    if method == "fourier":
+        drift = _fourier_baseline(x_ppm, drift_amp, max_cycles=2, rng=rng)
+    else:
+        drift = _spline_baseline(x_ppm, drift_amp, n_knots=rng.integers(4,9), rng=rng)
+
+    # optional broad macromolecule-like hump(s)
+    hump = 0.0
+    use_hump = rng.random() < add_gauss_prob
+    hump_count = 0
+    if use_hump:
+        hump_count = rng.integers(gauss_count_range[0], gauss_count_range[1]+1)
+        hump = _broad_gaussians(x_ppm, amp=0.8*drift_amp, n=hump_count, std_ppm=(1.0, 2.0), rng=rng)
+
+    b_real = global_scale * (drift + hump)
+    b_real = _clamp_and_debias(b_real, max_abs=clamp_frac*ref_peak_height)
+
+    # imag baseline: same shape but milder + tiny extra drift
+    imag_scale = rng.uniform(0.3, 0.5)
+    extra_imag = _fourier_baseline(x_ppm, 0.2*drift_amp, max_cycles=1, rng=rng) * 0.15
+    b_imag = imag_scale * b_real + extra_imag
+    b_imag = _clamp_and_debias(b_imag, max_abs=0.5*clamp_frac*ref_peak_height)
+
+    params = dict(
+        severity=severity, method=method, drift_frac=drift_frac,
+        global_scale=global_scale, use_hump=use_hump, hump_count=hump_count,
+        clamp_frac=clamp_frac, imag_scale=imag_scale, ref_peak_height=ref_peak_height
+    )
+    return b_real, b_imag, params
+
 def main():
     available_devices = tf.config.list_physical_devices('GPU')
     tf.config.set_visible_devices(available_devices[4], 'GPU')
@@ -1133,6 +1237,9 @@ def main():
     model = multi_channel_cnn(input_shape=(2048, 8), output_shape=(2048, 10), num_blocks=20)
     output = model(dummy_input)
     print(f"Output shape: {output.shape}")
+
+
+
 
 if __name__ == "__main__":
     main()

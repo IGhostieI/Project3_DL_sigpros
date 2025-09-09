@@ -9,7 +9,7 @@ from scipy.fft import ifft, fftshift, fft
 import time
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from myfunctions_tf import create_baseline, MM_baseline, read_complex_raw, scale_complex_data, add_gauss_noise_from_wanted_SNR, frequency_shift_jitter, BPF_ppm, ComplexFilterOptimizer, load_mrui_txt_data
+from myfunctions_tf import create_baseline, MM_baseline, read_complex_raw, scale_complex_data, add_gauss_noise_from_wanted_SNR, frequency_shift_jitter, BPF_ppm, ComplexFilterOptimizer, load_mrui_txt_data, random_baseline_realistic
 def check_for_flipping(signal, name, idx):
     max_val = np.max(signal.real)
     min_val = np.min(signal.real)
@@ -27,7 +27,7 @@ def main():
     linewidths = [3, 5, 7, 10]
     TEs = [20, 30, 40]
     base_path = os.getcwd()
-    num_spectra = 100
+    num_spectra = 500
     
     ppm_range = (12.528, -3.121)
     ppm_jitter_range = (-0.03, 0.03)
@@ -66,7 +66,7 @@ def main():
                                         "Cr": (4.0, 5.0),   
                                         "PCr": (3.0, 4.0),
                                         "GPC": (0.5, 1.2), "PCho": (0.5, 1.2),
-                                        "Glu": (7.0, 11.0), "Gln": (1.5, 4.0),
+                                        "Glu": (6.5, 9), "Gln": (1.8, 3.0),
                                         "mI": (3.5, 5.5),   "GSH": (1.0, 2.5),
                                         "GABA": (1.0, 2.0), "Glc": (1.0, 2.0),
                                         "Tau": (0.8, 1.8),  "Gly": (0.3, 0.8),
@@ -101,11 +101,12 @@ def main():
                     real = metabolite_raw.real
                     imag = metabolite_raw.imag
                     # Calculate the area under the curve (AUC) of the metabolite spectrum
-                    AUC_metabolite = np.sum(abs(np.sqrt(real**2 + imag**2)))
                     # Get the current metabolite name from the file name
                     current_metabolite = raw_file.replace(".npz", "")
+                    
+                        
                     if current_metabolite != "Cr":
-                        real, imag = frequency_shift_jitter(complex_data=(real, imag), ppm_range=ppm_range, ppm_jitter_range=ppm_jitter_range)                       
+                        real, imag = frequency_shift_jitter(complex_data=(real, imag), ppm_range=ppm_range, ppm_jitter_range=ppm_jitter_range)                 
                     # Normalize the spectrum and scale it by a random factor within the metabolite concentration range
                     normalize_factor = np.sum(np.sqrt(real**2 + imag**2))
                     scaling_factor = np.random.uniform(metabolite_concentrations[current_metabolite][0], metabolite_concentrations[current_metabolite][1])
@@ -114,8 +115,9 @@ def main():
                     check_for_flipping(metabolite_spectra[current_metabolite], current_metabolite, i)
                     current_metabolite_ifft = f"{current_metabolite}_ifft"
                     metabolite_FID[current_metabolite_ifft] = ifft(fftshift(metabolite_spectra[current_metabolite])) # Restore the FID of the metabolite, reverse the fftshift to get correct FID
-                    
-                    
+                    if current_metabolite == "NAA":
+                        NAA_AUC = np.sum(metabolite_spectra[current_metabolite].__abs__())
+
                     # Store the real and imaginary parts of the spectra
                     total_real_before_scaling += real
                     total_imag_before_scaling += imag
@@ -123,20 +125,38 @@ def main():
                     total_imag += ref_imag
                 original = total_real.copy() + 1j*total_imag.copy()  
                 # Add Gaussian noise to the spectra
-                SNR = np.random.uniform(7.5, 50)
+                SNR = np.random.uniform(10, 50)
                 total_real_augmented, total_imag_augmented = add_gauss_noise_from_wanted_SNR(total_real, total_imag, SNR)
-
+                augmented = total_real_augmented + 1j*total_imag_augmented
                 # Create a baseline and add it to the augmented spectra
                 input_range = np.linspace(-3.121, 12.528, 2048)
                 n_gaussians = np.random.randint(5, 10)
                 STD_RANGE = (0.5, 10)
                 AMPLITUDE_RANGE = (-1/100000, 1/100000)
                 
-                baseline_real, _, _  = MM_baseline(ppm_range=input_range, max_signal=np.max(total_real_augmented), tolerance=0.1, jitter_range=(-0.05, 0.05))
+                
+                
+                """ baseline_real, _, _  = MM_baseline(ppm_range=input_range, max_signal=np.max(total_real_augmented), tolerance=0.1, jitter_range=(-0.05, 0.05))
                 baseline_imag= create_baseline(input_range, n_gaussians=n_gaussians, std_range=STD_RANGE, amplitude_range=AMPLITUDE_RANGE)
                 scaling_factor = np.random.uniform(0, 1) # Scale the baseline by a random factor to decrease the importance of the baseline and give the model more freedom to learn the metabolite spectra
                 baseline_real*=scaling_factor
-                baseline_imag*=scaling_factor
+                baseline_imag*=scaling_factor """
+                
+                
+                # Scale all the different spectra to the same range, based on the real part of the augmented spectrum
+                max_val = np.max(total_real_augmented)
+                for key in metabolite_spectra.keys():
+                    metabolite_spectra[key] = (metabolite_spectra[key]) / (max_val)
+                    FID_key = f"{key}_ifft"
+                    metabolite_FID[FID_key] = (metabolite_FID[FID_key]) / (max_val)
+                original = (original) / (max_val)
+                augmented = (augmented) / (max_val)
+                NAA_AUC /= max_val
+                NAA_peak_height = 2*NAA_AUC/(np.pi*linewidth)
+                original_ifft = np.fft.ifft(fftshift(original)) # Restore the FID of the original spectrum, reverse the fftshift to get correct FID
+                
+                baseline_real, baseline_imag, info = random_baseline_realistic(input_range, ref_peak_height=NAA_peak_height, severity_probs=(0.8, 0.2, 0))
+                
                 total_real_augmented += baseline_real
                 total_imag_augmented += baseline_imag
 
@@ -148,18 +168,11 @@ def main():
                 baseline = baseline_real + 1j*baseline_imag
                 augmented_ifft = complex_augmented_ifft.real + 1j*complex_augmented_ifft.imag
                 
-                # Scale all the different spectra to the same range, based on the real part of the augmented spectrum
-                max_val = np.max(total_real_augmented)
-                for key in metabolite_spectra.keys():
-                    metabolite_spectra[key] = (metabolite_spectra[key]) / (max_val)
-                    FID_key = f"{key}_ifft"
-                    metabolite_FID[FID_key] = (metabolite_FID[FID_key]) / (max_val)
-                original = (original) / (max_val)
-                augmented = (augmented) / (max_val)
-                baseline = (baseline) / (max_val)
-                augmented_ifft = (augmented_ifft) / (max_val)
+                new_max = np.max(augmented.real)
+                augmented /= new_max
+                baseline /= new_max
+                augmented_ifft /= new_max
                 
-                original_ifft = np.fft.ifft(fftshift(original)) # Restore the FID of the original spectrum, reverse the fftshift to get correct FID
                 if optimization:
                     # Estimate the poles and zeros of the filter
                     
