@@ -114,10 +114,21 @@ junit.xml
 # Custom exclusions
 test*
 generated_data/
+synth_gen/generated_data/
+synth_gen/train/
+synth_gen/val/
+
+synth_gen/train_2/
+synth_gen/val_2/
 Morteza/
 SUBJECTS/
 basis_sets/
 tf_experiments/
+Final_for_paper/
 *.out
 in_vivo_data/
+in_vivo_data_2/
 figures/
+figures_2/
+tf_trained_models/
+*.png
