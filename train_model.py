@@ -12,7 +12,7 @@ import numpy as np
 from typing import Tuple, List
 import scipy.stats as stats
 
-from myfunctions_tf import load_from_directory, make_current_time_directory, VisualizePredictionCallback, make_metadata_file, multi_channel_cnn_explicit_conv, build_mrs_unet_1d, multi_channel_cnn
+from myfunctions_tf import load_from_directory, make_current_time_directory, VisualizePredictionCallback, make_metadata_file, build_mrs_unet_1d, multi_channel_cnn
 from tensorflow.keras.utils import plot_model
 
 from datetime import datetime

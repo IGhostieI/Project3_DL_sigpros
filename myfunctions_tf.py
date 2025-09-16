@@ -240,6 +240,7 @@ def load_from_directory(path:str, num_signals:int=-1, input_keys:List[str]=["aug
         
         for input_key in input_keys:
             loaded_input = loaded_data[input_key]
+            print(f"Loaded input key {input_key} from file {file}")
             if input_key == "a" or input_key == "b":
                 loaded_input = np.pad(loaded_input, (0, 2048-len(loaded_input)), mode="constant", constant_values=0)
             real_part_input = loaded_input.real
@@ -252,6 +253,7 @@ def load_from_directory(path:str, num_signals:int=-1, input_keys:List[str]=["aug
         for output_key in output_keys:
             try :
                 loaded_output = loaded_data[output_key]
+                print(f"Loaded output key {output_key} from file {file}\n")
             except:
                 print(f"Output key {output_key} not found in file {file}")
                 continue
@@ -923,21 +925,28 @@ class VisualizePredictionCallback(tf.keras.callbacks.Callback):
                         plt.ylabel("Intensity [a.u.]")
                         plt.title("Baseline fitting")
                         plt.legend()   
-                elif output_key != "metadata" or output_key != "iir_order":
+                elif (output_key != "metadata" or output_key != "iir_order") and "ifft" not in output_key:
                     
-                    if "baseline" in self.output_keys and "augmented" in self.input_keys:
+                    """ if "baseline" in self.output_keys and "augmented" in self.input_keys:
                         baseline_index = self.output_keys.index("baseline")
                         plt.plot(ppm, input_sample[:,2*augmented_index]-predicted[:,2*baseline_index], label="Baseline-corrected full spectrum", color="black")
                     elif "baseline" in self.output_keys and "augmented" not in self.input_keys and "augmented_ifft" in self.input_keys:
                         augmented_ifft_index = self.input_keys.index("augmented_ifft")
                         augmented_fft_from_ifft = fftshift(fft(input_sample[:,2*augmented_ifft_index]+1j*input_sample[:,2*augmented_ifft_index+1]))
                         baseline_index = self.output_keys.index("baseline")
-                        plt.plot(ppm, augmented_fft_from_ifft-true_output[:,2*baseline_index], label="Baseline-corrected full spectrum", color="black")
+                        plt.plot(ppm, augmented_fft_from_ifft-true_output[:,2*baseline_index], label="Baseline-corrected full spectrum", color="black") """
                         
                     plt.plot(ppm, true_output[:,2*(self.output_keys.index(output_key))], label="Ground truth", color="magenta")
                     plt.plot(ppm, predicted[:,2*(self.output_keys.index(output_key))], label="predicted", color="cyan")
                     plt.xlabel("Chemical shift [ppm]")
                     plt.gca().invert_xaxis()  # Flip the x-axis
+                    plt.ylabel("Intensity [a.u.]")
+                    plt.title(f"{output_key} fitting")
+                    plt.legend()
+                elif "ifft" in output_key:
+                    plt.plot(true_output[:,2*(self.output_keys.index(output_key))], label="Ground truth", color="magenta")
+                    plt.plot(predicted[:,2*(self.output_keys.index(output_key))], label="predicted", color="cyan")
+                    plt.xlabel("Time [idx]")
                     plt.ylabel("Intensity [a.u.]")
                     plt.title(f"{output_key} fitting")
                     plt.legend()
@@ -1126,6 +1135,89 @@ def multi_channel_cnn(input_shape=(2048, 6), output_shape=(2048, 2), num_blocks=
     
     model = Model(inputs=input, outputs=outputs)
     return model
+
+
+#import tensorflow as tf
+from tensorflow.keras import layers as L, models as M
+
+# ===== initializers =====
+HE      = tf.keras.initializers.HeNormal()
+GLOROT  = tf.keras.initializers.GlorotUniform()
+Z       = tf.keras.initializers.Zeros()
+
+# ===== utilities =====
+def bn_lrelu(x, alpha=0.1):
+    x = L.BatchNormalization()(x)  # gamma=1, beta=0
+    return L.LeakyReLU(alpha=alpha)(x)
+
+def conv_1x1(x, c, use_bias=False):
+    return L.Conv1D(
+        c, kernel_size=1, padding='same',
+        use_bias=use_bias, kernel_initializer=HE, bias_initializer=Z
+    )(x)
+
+def conv_2x1(x, c, use_bias=False):
+    # "2x1" in the legend → 1D conv with kernel_size=2
+    return L.Conv1D(
+        c, kernel_size=2, padding='same',
+        use_bias=use_bias, kernel_initializer=HE, bias_initializer=Z
+    )(x)
+
+
+# ===== model =====
+def build_mrs_unet_1d(
+    in_ch=2,
+    out_ch=22,
+    filt_down=(1, 16, 32, 64, 80, 80, 96, 128, 128, 160, 192),
+    kernel_sizes = (7, 7, 5, 5, 3, 3, 3, 3, 3, 3, 3),
+    use_bias=False,
+    name='MRS_UNet1D'
+):
+    """
+    Input: (T, in_ch) with T divisible by 2^(len(filt_down)-1).
+    Encoder filters follow the diagram down to 4×…×192, then mirror upward.
+    HeNormal for all convs; final head uses GlorotUniform.
+    """
+    x_in = L.Input(shape=(None, in_ch))
+
+    # Encoder
+    skips = []
+    x = x_in
+    for i, c in enumerate(filt_down):
+        x = L.Conv1D(c, kernel_size=kernel_sizes[i], padding='same', activation='relu', kernel_initializer=HE)(x)
+        skips.append(x)
+        if i > 6:
+            x = L.Dropout(0.2)(x)
+        if i < len(filt_down) - 1:
+            x = L.AveragePooling1D(pool_size=2)(x)  # 2048→1024→…→4
+
+    # Decoder (mirror, excluding bottom)
+    count = 0
+    for i, (c, skip) in enumerate(zip(reversed(filt_down[:-1]), reversed(skips[:-1]))):
+        x = L.Conv1DTranspose(c, kernel_size=kernel_sizes[::-1][i], strides=2, padding='same', kernel_initializer=HE, activation='relu')(x)
+        # 4→8→…→2048
+        x = L.Concatenate()([x, skip])  # skip connection
+        if count < 6:
+            x = L.Dropout(0.2)(x)
+            count += 1
+    x = L.Conv1D(32, kernel_size=7, padding='same', activation='relu', kernel_initializer=HE)(x)
+    x = L.Dropout(0.2)(x)
+    x = L.Conv1D(32, kernel_size=5, padding='same', activation='relu', kernel_initializer=HE)(x)
+    x = L.Dropout(0.2)(x)
+    x = L.Conv1D(64, kernel_size=3, padding='same', activation='relu', kernel_initializer=HE)(x)
+    x = L.Dropout(0.2)(x)
+    # Final linear head
+    y = L.Conv1D(
+        out_ch, kernel_size=1, padding='same', use_bias=use_bias,
+        kernel_initializer=GLOROT, bias_initializer=Z, name='head_out'
+    )(x)
+
+    return M.Model(x_in, y, name=name)
+
+###############
+
+
+
 
 ### BASELINE NEW ###
 # --- helpers ---
