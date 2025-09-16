@@ -27,8 +27,8 @@ def main():
     linewidths = [3, 5, 7, 10]
     TEs = [20, 30, 40]
     base_path = os.getcwd()
-    num_spectra = 500
-    
+    num_spectra = 250
+    start_val = 1
     ppm_range = (12.528, -3.121)
     ppm_jitter_range = (-0.03, 0.03)
     now = time.strftime("%Y_%m_%d-%H_%M_%S")
@@ -84,8 +84,7 @@ def main():
             # Loop over the number of synthetic spectra to generate
             print(f"Generating {num_spectra} synthetic spectra")
             
-            start_val = 0
-            for i in tqdm(range(start_val+1,start_val+num_spectra+1)):
+            for i in tqdm(range(start_val,start_val+num_spectra)):
                 metabolite_spectra = {}
                 metabolite_FID = {}
                 # Initialize/reset arrays to store real and imaginary parts of spectra
@@ -145,15 +144,10 @@ def main():
                 
                 # Scale all the different spectra to the same range, based on the real part of the augmented spectrum
                 max_val = np.max(total_real_augmented)
-                for key in metabolite_spectra.keys():
-                    metabolite_spectra[key] = (metabolite_spectra[key]) / (max_val)
-                    FID_key = f"{key}_ifft"
-                    metabolite_FID[FID_key] = (metabolite_FID[FID_key]) / (max_val)
-                original = (original) / (max_val)
                 augmented = (augmented) / (max_val)
                 NAA_AUC /= max_val
                 NAA_peak_height = 2*NAA_AUC/(np.pi*linewidth)
-                original_ifft = np.fft.ifft(fftshift(original)) # Restore the FID of the original spectrum, reverse the fftshift to get correct FID
+                
                 
                 baseline_real, baseline_imag, info = random_baseline_realistic(input_range, ref_peak_height=NAA_peak_height, severity_probs=(0.8, 0.2, 0))
                 
@@ -162,7 +156,8 @@ def main():
 
                 complex_augmented = total_real_augmented + total_imag_augmented*1j
                 complex_augmented_ifft = ifft(fftshift(complex_augmented)) # Restore the FID of the augmented spectrum, reverse the fftshift to get correct FID
-            
+
+                original_ifft = np.fft.ifft(fftshift(original)) # Restore the FID of the original spectrum, reverse the fftshift to get correct FID
                 
                 augmented = total_real_augmented + 1j*total_imag_augmented
                 baseline = baseline_real + 1j*baseline_imag
@@ -172,7 +167,12 @@ def main():
                 augmented /= new_max
                 baseline /= new_max
                 augmented_ifft /= new_max
-                
+                original /= new_max
+                original_ifft /= new_max
+                for key in metabolite_spectra.keys():
+                    metabolite_spectra[key] /= new_max
+                    FID_key = f"{key}_ifft"
+                    metabolite_FID[FID_key] /= new_max
                 if optimization:
                     # Estimate the poles and zeros of the filter
                     
@@ -214,7 +214,7 @@ def main():
                         "baseline": baseline, 
                         "metadata": metadata_list, 
                         "metadata_keys": metadata_keys,
-                    "augmented_ifft":augmented_ifft,
+                        "augmented_ifft":augmented_ifft,
                         "a":a,
                         "b":b,
                         "iir_order": iir_order,
