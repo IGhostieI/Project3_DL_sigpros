@@ -1,0 +1,19 @@
+name: tf_DL_py310
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10.*
+  - numpy=1.25.*
+  - scipy=1.11.*
+  - pandas=2.2.*
+  - scikit-learn=1.5.*
+  - matplotlib=3.9.*
+  - statsmodels
+  - tqdm
+  - pydot
+  - graphviz
+  - packaging
+  - pillow
+  - pip
+  - pip:
+      - tensorflow==2.14.0
