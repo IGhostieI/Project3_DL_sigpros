@@ -50,11 +50,13 @@ def process_and_save(
     margin=0, 
     ftype="butter", 
     pass_band_gain=1.0, 
-    model_weights_path=None
+    model_weights_path=None,
+    normalize_conc_with_tCr=False
 ):
     # Load data
     FID, freq, metadata = load_mrui_txt_data(path)
-    norm_freq_fft = np.fft.fftshift(np.fft.fft(FID)) / np.max(np.fft.fftshift(np.fft.fft(FID)))
+    max_spec = np.max(np.fft.fftshift(np.fft.fft(FID)).real)
+    norm_freq_fft = np.fft.fftshift(np.fft.fft(FID)) / max_spec
     norm_FID = np.fft.ifft(norm_freq_fft)
     norm_FID = resample_input_data(metadata, norm_FID, ppm)
     norm_freq_fft = np.fft.fft(norm_FID)
@@ -103,6 +105,8 @@ def process_and_save(
 
     # Predict and post-process output
     in_vivo_output = np.squeeze(model.predict(in_vivo_input), axis=0)
+    if not normalize_conc_with_tCr:
+        in_vivo_output *= max_spec
     in_vivo_output_dict = postprocess_predicted_data(in_vivo_output, output_keys)
 
     # Return or save the processed data
@@ -128,6 +132,8 @@ ftype = "butter"
 pass_band_gain = 2
 
 DO_PREDICTIONS = False  # Set to False to load from saved pickle files
+normalize_conc_with_tCr = False  # Set to True to normalize concentrations with tCr
+
 slurm = True if 'SLURM_JOB_ID' in os.environ else False
 print("SLURM job:", slurm)
 global_normalization = False  # Set to True if you want to normalize the data globally
@@ -136,8 +142,8 @@ global_normalization = False  # Set to True if you want to normalize the data gl
 weight_dict = {
     "FID":"/home/stud/casperc/bhome/Project3_DL_sigpros/Final_for_paper/2025_09_18-11_26_28_['augmented_ifft']_['NAA', 'NAAG', 'Cr', 'PCr']_DenseNet_RMSprop_masked_mse/checkpoint.hdf5"
 }
-loaded_metabolites = ["NAA", "Cr", "Cr", "PCr"]
-target_metabolites = ["NAA", "Cr", "Cr", "PCr"]
+loaded_metabolites = ["NAA", "NAAG", "Cr", "PCr"]
+target_metabolites = ["NAA", "NAAG", "Cr", "PCr"]
 
 
 if not slurm:
@@ -180,7 +186,8 @@ if DO_PREDICTIONS:
                                 margin=margin,
                                 ftype=ftype,
                                 pass_band_gain=pass_band_gain,
-                                model_weights_path=weight_path
+                                model_weights_path=weight_path,
+                                normalize_conc_with_tCr=normalize_conc_with_tCr
                             )
                             subject_id = file.split(".")[0]
                             data_dict_HLSVD[folder]["lcm"][subject_id] = LCModel_metabolites_dict
@@ -198,7 +205,7 @@ if DO_PREDICTIONS:
 os.makedirs("correlations_2", exist_ok=True)
 # Load saved pickle files
 
-ppm_crop = np.where((ppm >= 0.2) & (ppm <= 4.2))[0]
+ppm_crop = np.where((ppm >= 1.2) & (ppm <= 4.2))[0]
             
 # Before starting any plots, first load all data and find global max values
 all_configs_data = {}
@@ -263,35 +270,58 @@ for config, data_dict_HLSVD in all_configs_data.items():
             pred_data = data["pred"].get(subject, {})
             normalized_data[folder]["lcm"][subject] = {}
             normalized_data[folder]["pred"][subject] = {}
-
+    
             for met in lcm_data.keys():
                 # Normalize LCM data using global maximum
-                normalized_data[folder]["lcm"][subject][met] = {
-                    "/Cr+PCr": lcm_data[met]["/Cr+PCr"] / global_max_concentration_lcm
-                }
-
-                # Normalize predicted data using global maximum
-                if met == "Glu+Gln":
-                    normalized_data[folder]["pred"][subject][met] = np.sum(
-                        pred_data["Glu"][ppm_crop].real + pred_data["Gln"][ppm_crop].real)/np.sum(
-                        pred_data["Cr"][ppm_crop].real+pred_data["PCr"][ppm_crop].real) / global_max_concentration_pred
-                elif met == "Cr+PCr":
-                    normalized_data[folder]["pred"][subject][met] = np.sum(
-                        pred_data["Cr"][ppm_crop].real + pred_data["PCr"][ppm_crop].real)/np.sum(
-                        pred_data["Cr"][ppm_crop].real+pred_data["PCr"][ppm_crop].real)/global_max_concentration_pred
-                elif met == "NAA+NAAG":
-                    normalized_data[folder]["pred"][subject][met] = np.sum(
-                        pred_data["NAA"][ppm_crop].real + pred_data["NAAG"][ppm_crop].real)/np.sum(
-                        pred_data["Cr"][ppm_crop].real+pred_data["PCr"][ppm_crop].real)/global_max_concentration_pred
-                elif met == "PCh+GPC":
-                    normalized_data[folder]["pred"][subject][met] = np.sum(
-                        pred_data["PCho"][ppm_crop].real + pred_data["GPC"][ppm_crop].real)/np.sum(
-                        pred_data["Cr"][ppm_crop].real+pred_data["PCr"][ppm_crop].real)/global_max_concentration_pred
+                if normalize_conc_with_tCr:
+                    normalized_data[folder]["lcm"][subject][met] = {
+                        "/Cr+PCr": lcm_data[met]["/Cr+PCr"] / global_max_concentration_lcm
+                    }
                 else:
-                    if met in pred_data.keys():
+                    normalized_data[folder]["lcm"][subject][met] = {
+                        "conc": lcm_data[met]["conc"] / global_max_concentration_lcm
+                    }
+                # Normalize predicted data using global maximum
+                if normalize_conc_with_tCr:
+                    
+                    if met == "Glu+Gln":
                         normalized_data[folder]["pred"][subject][met] = np.sum(
-                            pred_data[met][ppm_crop].real)/np.sum(
+                            pred_data["Glu"][ppm_crop].real + pred_data["Gln"][ppm_crop].real)/np.sum(
+                            pred_data["Cr"][ppm_crop].real+pred_data["PCr"][ppm_crop].real) / global_max_concentration_pred
+                    elif met == "Cr+PCr":
+                        normalized_data[folder]["pred"][subject][met] = np.sum(
+                            pred_data["Cr"][ppm_crop].real + pred_data["PCr"][ppm_crop].real)/np.sum(
                             pred_data["Cr"][ppm_crop].real+pred_data["PCr"][ppm_crop].real)/global_max_concentration_pred
+                    elif met == "NAA+NAAG":
+                        normalized_data[folder]["pred"][subject][met] = np.sum(
+                            pred_data["NAA"][ppm_crop].real + pred_data["NAAG"][ppm_crop].real)/np.sum(
+                            pred_data["Cr"][ppm_crop].real+pred_data["PCr"][ppm_crop].real)/global_max_concentration_pred
+                    elif met == "PCh+GPC":
+                        normalized_data[folder]["pred"][subject][met] = np.sum(
+                            pred_data["PCho"][ppm_crop].real + pred_data["GPC"][ppm_crop].real)/np.sum(
+                            pred_data["Cr"][ppm_crop].real+pred_data["PCr"][ppm_crop].real)/global_max_concentration_pred
+                    else:
+                        if met in pred_data.keys():
+                            normalized_data[folder]["pred"][subject][met] = np.sum(
+                                pred_data[met][ppm_crop].real)/np.sum(
+                                pred_data["Cr"][ppm_crop].real+pred_data["PCr"][ppm_crop].real)/global_max_concentration_pred
+                else:
+                    if met == "Glu+Gln":
+                        normalized_data[folder]["pred"][subject][met] = np.sum(
+                            pred_data["Glu"][ppm_crop].real + pred_data["Gln"][ppm_crop].real) / global_max_concentration_pred
+                    elif met == "Cr+PCr":
+                        normalized_data[folder]["pred"][subject][met] = np.sum(
+                            pred_data["Cr"][ppm_crop].real + pred_data["PCr"][ppm_crop].real) / global_max_concentration_pred
+                    elif met == "NAA+NAAG":
+                        normalized_data[folder]["pred"][subject][met] = np.sum(
+                            pred_data["NAA"][ppm_crop].real + pred_data["NAAG"][ppm_crop].real) / global_max_concentration_pred
+                    elif met == "PCh+GPC":
+                        normalized_data[folder]["pred"][subject][met] = np.sum(
+                            pred_data["PCho"][ppm_crop].real + pred_data["GPC"][ppm_crop].real) / global_max_concentration_pred
+                    else:
+                        if met in pred_data.keys():
+                            normalized_data[folder]["pred"][subject][met] = np.sum(
+                                pred_data[met][ppm_crop].real) / global_max_concentration_pred
 
     # Scatter plot
     output_dir = "figures_2"
@@ -316,7 +346,9 @@ for config, data_dict_HLSVD in all_configs_data.items():
         pred_all = []
 
         for folder, data in normalized_data.items():
-            lcm_values = [v[met]["/Cr+PCr"] for v in data["lcm"].values() if met in v]
+
+            lcm_values = [v[met]["/Cr+PCr" if normalize_conc_with_tCr else "conc"] for v in data["lcm"].values() if met in v]
+
             pred_values = [v[met] for v in data["pred"].values() if met in v]
 
             # Append to global lists
@@ -370,32 +402,16 @@ for config, data_dict_HLSVD in all_configs_data.items():
 
         # Scatter data points with increased size and opacity
         for folder, data in normalized_data.items():
-            lcm_values = [v[met]["/Cr+PCr"] for v in data["lcm"].values() if met in v]
+            lcm_values = [v[met]["/Cr+PCr" if normalize_conc_with_tCr else "conc"] for v in data["lcm"].values() if met in v]
             pred_values = [v[met] for v in data["pred"].values() if met in v]
             plt.scatter(lcm_values, pred_values, label=folder, s=SCATTER_SIZE, alpha=SCATTER_OPACITY)  # Increased size and opacity
 
-        # Add Pearson line (linear regression)
+        """ # Add Pearson line (linear regression)
         if len(lcm_all) > 1:  # Ensure we have enough points
             slope, intercept = np.polyfit(lcm_all, pred_all, 1)
             x_line = np.linspace(0, 3, 300)
             y_line = slope * x_line + intercept
-            plt.plot(x_line, y_line, 'r-', label='Pearson')  # Simplified label
-            
-            """ # Add LOWESS curve for Spearman visualization
-            try:
-                # Generate LOWESS fit with frac=0.6 (adjust as needed)
-                lowess_result = lowess(pred_all, lcm_all, frac=0.6)
-                plt.plot(lowess_result[:, 0], lowess_result[:, 1], 'g-', label='Spearman')  # Simplified label
-
-            except Exception as e:
-                print(f"Could not generate LOWESS curve for {met}: {e}")
-            try:
-                # Generate another LOWESS fit with different parameters to represent Kendall's Tau
-                # Using a higher frac value creates a smoother curve
-                kendall_lowess_result = lowess(pred_all, lcm_all, frac=0.75)  # Higher frac for more smoothing
-                plt.plot(kendall_lowess_result[:, 0], kendall_lowess_result[:, 1], 'b--',  label='Kendall', dashes=(5, 2))  # Blue dashed line
-            except Exception as e:
-                print(f"Could not generate Kendall visualization for {met}: {e}") """
+            plt.plot(x_line, y_line, 'r-', label='Pearson')  # Simplified label"""
         # Create a single annotation with all statistics
         stats_text = (f'$\\mathbf{{{met}}}$\n'
                     f'Pearson R = {pearson_corr:.2f} ($\\mathit{{p}}$={format_p_value(pearson_p)})')
@@ -406,8 +422,8 @@ for config, data_dict_HLSVD in all_configs_data.items():
         y_lim = (-0.05, 3.0)
         x_mid = (x_lim[0] + x_lim[1]) / 2
         y_mid = (y_lim[0] + y_lim[1]) / 2
-        plt.xlim(x_lim)
-        plt.ylim(y_lim)
+        """ plt.xlim(x_lim)
+        plt.ylim(y_lim) """
         # Choose position based on data distribution
         # Determine position based just on top/bottom data distribution
         if y_mean > y_mid:
@@ -433,6 +449,8 @@ for config, data_dict_HLSVD in all_configs_data.items():
         ax = plt.gca()  # Get current axis
         ax.xaxis.set_minor_locator(tick.MultipleLocator(0.1))  # Minor ticks every 0.1
         ax.yaxis.set_minor_locator(tick.MultipleLocator(0.1))  # Minor ticks every 0.1
+        ax.xaxis.set_major_formatter(tick.ScalarFormatter(useMathText=True))
+        ax.ticklabel_format(axis='x', style='sci', scilimits=(0,0))
 
         # Make the minor ticks more visible but less prominent than major ticks
         ax.tick_params(which='major', length=14, width=4, labelsize=18+font_size_offset)
